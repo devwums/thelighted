@@ -378,7 +378,7 @@ mod test {
 
     #[test]
     fn test_escrow_and_release() {
-        let (env, client, admin, treasury, contract_id) = setup();
+        let (env, client, admin, treasury, _contract_id) = setup();
         let token_admin = Address::generate(&env);
         let payer = Address::generate(&env);
         let restaurant = Address::generate(&env);
