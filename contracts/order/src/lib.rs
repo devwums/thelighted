@@ -23,8 +23,6 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, vec, Address, Env, String, Vec,
 };
 
-use loyalty_token::Client as LoyaltyTokenClient;
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -85,10 +83,6 @@ pub enum DataKey {
     RestaurantOrders(u64),
     /// Ordered list of order IDs for a customer.
     CustomerOrders(Address),
-    /// Address of the BITE loyalty token contract.
-    LoyaltyToken,
-    /// Flag to enable/disable reward minting.
-    RewardsEnabled,
 }
 
 // ---------------------------------------------------------------------------
@@ -105,14 +99,12 @@ impl OrderContract {
     // -----------------------------------------------------------------------
 
     /// Deploy and initialise the order contract.
-    pub fn initialize(env: Env, admin: Address, loyalty_token: Address, rewards_enabled: bool) {
+    pub fn initialize(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Count, &0u64);
-        env.storage().instance().set(&DataKey::LoyaltyToken, &loyalty_token);
-        env.storage().instance().set(&DataKey::RewardsEnabled, &rewards_enabled);
         env.storage().instance().extend_ttl(17_280, 17_280);
     }
 
@@ -248,7 +240,6 @@ impl OrderContract {
         );
     }
 
-    
     // -----------------------------------------------------------------------
     // Restaurant / Admin actions
     // -----------------------------------------------------------------------
@@ -265,7 +256,6 @@ impl OrderContract {
         Self::assert_admin_or_panic(&env, &caller);
 
         let mut order = Self::load_order(&env, order_id);
-        let old_status = order.status.clone();
 
         order.status = match order.status {
             OrderStatus::Pending => OrderStatus::Confirmed,
@@ -277,11 +267,6 @@ impl OrderContract {
         };
         order.updated_at = env.ledger().timestamp();
         Self::save_order(&env, &order);
-
-        // Mint BITE rewards if order was just delivered
-        if old_status == OrderStatus::Ready && order.status == OrderStatus::Delivered {
-            Self::maybe_mint_reward(&env, &order);
-        }
 
         env.events().publish(
             (symbol_short!("advanced"), symbol_short!("order")),
@@ -335,30 +320,6 @@ impl OrderContract {
         env.storage().instance().get(&DataKey::Count).unwrap_or(0)
     }
 
-    /// Toggle reward minting on/off (admin only).
-    pub fn set_rewards_enabled(env: Env, caller: Address, enabled: bool) {
-        caller.require_auth();
-        Self::assert_admin_or_panic(&env, &caller);
-        env.storage().instance().set(&DataKey::RewardsEnabled, &enabled);
-        env.storage().instance().extend_ttl(17_280, 17_280);
-    }
-
-    /// Get the stored loyalty token address.
-    pub fn get_loyalty_token(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::LoyaltyToken)
-            .unwrap_or_else(|| panic!("loyalty token address not set"))
-    }
-
-    /// Check if rewards are enabled.
-    pub fn is_rewards_enabled(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&DataKey::RewardsEnabled)
-            .unwrap_or(false)
-    }
-
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
@@ -397,39 +358,6 @@ impl OrderContract {
         env.storage().persistent().set(&key, &list);
         env.storage().persistent().extend_ttl(&key, ttl, ttl);
     }
-
-    fn maybe_mint_reward(env: &Env, order: &Order) {
-        let rewards_enabled: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::RewardsEnabled)
-            .unwrap_or(false);
-        
-        if !rewards_enabled {
-            return;
-        }
-
-        let loyalty_token_address: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::LoyaltyToken)
-            .unwrap_or_else(|| panic!("loyalty token address not set"));
-
-        // Calculate reward: bite_reward = total_amount / 10_000, minimum 1 * 10^7
-        let bite_reward = (order.total_amount / 10_000).max(10_000_000);
-
-        // Create a client for the loyalty token contract
-        let loyalty_client = LoyaltyTokenClient::new(env, &loyalty_token_address);
-        
-        // Mint the tokens (the order contract is the caller)
-        loyalty_client.mint(&env.current_contract_address(), &order.customer, &bite_reward);
-
-        // Emit reward event
-        env.events().publish(
-            (symbol_short!("rewarded"), symbol_short!("order")),
-            (order.id, order.customer.clone(), bite_reward),
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -451,21 +379,21 @@ mod test {
         }
     }
 
-    fn setup() -> (Env, OrderContractClient<'static>, Address, Address) {
+    fn setup() -> (Env, OrderContractClient<'static>) {
         let env = Env::default();
         env.mock_all_auths();
         let cid = env.register_contract(None, OrderContract);
         let client = OrderContractClient::new(&env, &cid);
-        let admin = Address::generate(&env);
-        let loyalty_token = Address::generate(&env);
-        client.initialize(&admin, &loyalty_token, &true);
-        (env, client, admin, loyalty_token)
+        (env, client)
     }
 
     #[test]
     fn test_place_and_get_order() {
-        let (env, client, _admin, _loyalty_token) = setup();
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
         let customer = Address::generate(&env);
+
+        client.initialize(&admin);
 
         let items = vec![&env, make_item(&env, 1, 2, 5_000_000)]; // 2 × 0.5 XLM
         let id = client.place_order(
@@ -483,8 +411,10 @@ mod test {
 
     #[test]
     fn test_advance_status() {
-        let (env, client, admin, _loyalty_token) = setup();
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
         let customer = Address::generate(&env);
+        client.initialize(&admin);
 
         let items = vec![&env, make_item(&env, 1, 1, 7_000_000)];
         let id = client.place_order(&customer, &1, &items, &String::from_str(&env, ""));
@@ -504,8 +434,10 @@ mod test {
 
     #[test]
     fn test_customer_cancel_pending() {
-        let (env, client, _admin, _loyalty_token) = setup();
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
         let customer = Address::generate(&env);
+        client.initialize(&admin);
 
         let items = vec![&env, make_item(&env, 2, 1, 3_000_000)];
         let id = client.place_order(&customer, &1, &items, &String::from_str(&env, ""));
@@ -517,8 +449,10 @@ mod test {
     #[test]
     #[should_panic(expected = "customers may only cancel pending orders")]
     fn test_customer_cannot_cancel_confirmed() {
-        let (env, client, admin, _loyalty_token) = setup();
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
         let customer = Address::generate(&env);
+        client.initialize(&admin);
 
         let items = vec![&env, make_item(&env, 1, 1, 5_000_000)];
         let id = client.place_order(&customer, &1, &items, &String::from_str(&env, ""));
@@ -528,8 +462,10 @@ mod test {
 
     #[test]
     fn test_get_restaurant_orders() {
-        let (env, client, _admin, _loyalty_token) = setup();
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
         let customer = Address::generate(&env);
+        client.initialize(&admin);
 
         let items = vec![&env, make_item(&env, 1, 1, 5_000_000)];
         client.place_order(&customer, &7, &items.clone(), &String::from_str(&env, ""));
@@ -537,178 +473,5 @@ mod test {
 
         let orders = client.get_restaurant_orders(&7);
         assert_eq!(orders.len(), 2);
-    }
-
-    #[test]
-    fn test_admin_helpers() {
-        let (env, client, admin, loyalty_token) = setup();
-        
-        // Test get_loyalty_token
-        assert_eq!(client.get_loyalty_token(), loyalty_token);
-        
-        // Test is_rewards_enabled (should be true from setup)
-        assert!(client.is_rewards_enabled());
-        
-        // Test set_rewards_enabled
-        client.set_rewards_enabled(&admin, &false);
-        assert!(!client.is_rewards_enabled());
-        
-        client.set_rewards_enabled(&admin, &true);
-        assert!(client.is_rewards_enabled());
-    }
-
-    #[test]
-    #[should_panic(expected = "unauthorized: admin only")]
-    fn test_set_rewards_enabled_unauthorized() {
-        let (env, client, _admin, _loyalty_token) = setup();
-        let unauthorized = Address::generate(&env);
-        client.set_rewards_enabled(&unauthorized, &false);
-    }
-
-    #[test]
-    fn test_reward_minting_on_delivery() {
-        let env = Env::default();
-        env.mock_all_auths();
-        
-        // Register both contracts
-        let order_contract_id = env.register_contract(None, OrderContract);
-        let loyalty_contract_id = env.register_contract(None, LoyaltyToken);
-        
-        let order_client = OrderContractClient::new(&env, &order_contract_id);
-        let loyalty_client = LoyaltyTokenClient::new(&env, &loyalty_contract_id);
-        
-        let admin = Address::generate(&env);
-        let customer = Address::generate(&env);
-        
-        // Initialize both contracts
-        loyalty_client.initialize(&admin, &order_contract_id); // Order contract is minter
-        order_client.initialize(&admin, &loyalty_contract_id, &true);
-        
-        // Place an order for 50,000,000 stroops (5 XLM)
-        let items = vec![&env, make_item(&env, 1, 1, 50_000_000)];
-        let order_id = order_client.place_order(&customer, &1, &items, &String::from_str(&env, ""));
-        
-        // Advance to delivered
-        order_client.advance_status(&admin, &order_id); // Confirmed
-        order_client.advance_status(&admin, &order_id); // Preparing  
-        order_client.advance_status(&admin, &order_id); // Ready
-        order_client.advance_status(&admin, &order_id); // Delivered
-        
-        // Check reward: 50,000,000 / 10,000 = 5,000 BITE tokens
-        let expected_reward = 5_000_000_000; // 5,000 * 10^7 base units
-        assert_eq!(loyalty_client.balance(&customer), expected_reward);
-    }
-
-    #[test]
-    fn test_no_reward_when_disabled() {
-        let env = Env::default();
-        env.mock_all_auths();
-        
-        // Register both contracts
-        let order_contract_id = env.register_contract(None, OrderContract);
-        let loyalty_contract_id = env.register_contract(None, LoyaltyToken);
-        
-        let order_client = OrderContractClient::new(&env, &order_contract_id);
-        let loyalty_client = LoyaltyTokenClient::new(&env, &loyalty_contract_id);
-        
-        let admin = Address::generate(&env);
-        let customer = Address::generate(&env);
-        
-        // Initialize both contracts with rewards disabled
-        loyalty_client.initialize(&admin, &order_contract_id);
-        order_client.initialize(&admin, &loyalty_contract_id, &false);
-        
-        // Place and deliver an order
-        let items = vec![&env, make_item(&env, 1, 1, 50_000_000)];
-        let order_id = order_client.place_order(&customer, &1, &items, &String::from_str(&env, ""));
-        
-        order_client.advance_status(&admin, &order_id); // Confirmed
-        order_client.advance_status(&admin, &order_id); // Preparing
-        order_client.advance_status(&admin, &order_id); // Ready
-        order_client.advance_status(&admin, &order_id); // Delivered
-        
-        // Should have no rewards
-        assert_eq!(loyalty_client.balance(&customer), 0);
-    }
-
-    #[test]
-    fn test_reward_minimum_threshold() {
-        let env = Env::default();
-        env.mock_all_auths();
-        
-        // Register both contracts
-        let order_contract_id = env.register_contract(None, OrderContract);
-        let loyalty_contract_id = env.register_contract(None, LoyaltyToken);
-        
-        let order_client = OrderContractClient::new(&env, &order_contract_id);
-        let loyalty_client = LoyaltyTokenClient::new(&env, &loyalty_contract_id);
-        
-        let admin = Address::generate(&env);
-        let customer = Address::generate(&env);
-        
-        // Initialize both contracts
-        loyalty_client.initialize(&admin, &order_contract_id);
-        order_client.initialize(&admin, &loyalty_contract_id, &true);
-        
-        // Place an order for 5,000 stroops (below threshold)
-        let items = vec![&env, make_item(&env, 1, 1, 5_000)];
-        let order_id = order_client.place_order(&customer, &1, &items, &String::from_str(&env, ""));
-        
-        // Advance to delivered
-        order_client.advance_status(&admin, &order_id); // Confirmed
-        order_client.advance_status(&admin, &order_id); // Preparing
-        order_client.advance_status(&admin, &order_id); // Ready
-        order_client.advance_status(&admin, &order_id); // Delivered
-        
-        // Should get minimum reward of 1 * 10^7
-        let min_reward = 10_000_000;
-        assert_eq!(loyalty_client.balance(&customer), min_reward);
-    }
-
-    #[test]
-    fn test_reward_formula_exact_values() {
-        let env = Env::default();
-        env.mock_all_auths();
-        
-        // Register both contracts
-        let order_contract_id = env.register_contract(None, OrderContract);
-        let loyalty_contract_id = env.register_contract(None, LoyaltyToken);
-        
-        let order_client = OrderContractClient::new(&env, &order_contract_id);
-        let loyalty_client = LoyaltyTokenClient::new(&env, &loyalty_contract_id);
-        
-        let admin = Address::generate(&env);
-        let customer1 = Address::generate(&env);
-        let customer2 = Address::generate(&env);
-        let customer3 = Address::generate(&env);
-        
-        // Initialize both contracts
-        loyalty_client.initialize(&admin, &order_contract_id);
-        order_client.initialize(&admin, &loyalty_contract_id, &true);
-        
-        // Test case 1: Exactly 10,000 stroops = 1 BITE
-        let items1 = vec![&env, make_item(&env, 1, 1, 10_000)];
-        let order1_id = order_client.place_order(&customer1, &1, &items1, &String::from_str(&env, ""));
-        
-        // Test case 2: 100,000 stroops = 10 BITE
-        let items2 = vec![&env, make_item(&env, 1, 1, 100_000)];
-        let order2_id = order_client.place_order(&customer2, &1, &items2, &String::from_str(&env, ""));
-        
-        // Test case 3: 1,000,000 stroops = 100 BITE
-        let items3 = vec![&env, make_item(&env, 1, 1, 1_000_000)];
-        let order3_id = order_client.place_order(&customer3, &1, &items3, &String::from_str(&env, ""));
-        
-        // Deliver all orders
-        for &order_id in &[order1_id, order2_id, order3_id] {
-            order_client.advance_status(&admin, &order_id); // Confirmed
-            order_client.advance_status(&admin, &order_id); // Preparing
-            order_client.advance_status(&admin, &order_id); // Ready
-            order_client.advance_status(&admin, &order_id); // Delivered
-        }
-        
-        // Verify rewards
-        assert_eq!(loyalty_client.balance(&customer1), 10_000_000); // 1 BITE
-        assert_eq!(loyalty_client.balance(&customer2), 100_000_000); // 10 BITE
-        assert_eq!(loyalty_client.balance(&customer3), 1_000_000_000); // 100 BITE
     }
 }

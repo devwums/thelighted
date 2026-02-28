@@ -13,8 +13,8 @@ return response.data;
 }
 throw new Error(response.error || "Failed to fetch trending stats");
 },
-staleTime: 5 _ 60 _ 1000,
-gcTime: 30 _ 60 _ 1000,
+staleTime: 5 * 60 *1000,
+gcTime: 30 * 60 *1000,
 retry: 2,
 });
 }
@@ -30,8 +30,8 @@ return response.data.map((trendingItem) => trendingItem.item);
 }
 throw new Error(response.error || "Failed to load trending items");
 },
-staleTime: 2 _ 60 _ 1000,
-gcTime: 10 _ 60 _ 1000,
+staleTime: 2 * 60 *1000,
+gcTime: 10 * 60 *1000,
 retry: 2,
 });
 }
@@ -47,8 +47,8 @@ return response.data;
 }
 throw new Error(response.error || "Failed to load chef's favorites");
 },
-staleTime: 10 _ 60 _ 1000,
-gcTime: 30 _ 60 _ 1000,
+staleTime: 10 * 60 *1000,
+gcTime: 30 * 60 *1000,
 retry: 2,
 });
 }

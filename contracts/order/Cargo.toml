@@ -8,7 +8,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 soroban-sdk = { workspace = true }
-loyalty_token = { path = "../loyalty_token", package = "loyalty-token" }
 
 [dev-dependencies]
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }

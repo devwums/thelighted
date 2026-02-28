@@ -149,7 +149,7 @@ export const qrApi = {
     }),
 };
 
-export default {
+const apiClient = {
   menu: menuApi,
   trending: trendingApi,
   contact: contactApi,
@@ -158,3 +158,5 @@ export default {
   analytics: analyticsApi,
   qr: qrApi,
 };
+
+export default apiClient;

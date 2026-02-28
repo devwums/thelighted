@@ -11,8 +11,8 @@ return response.data;
 }
 throw new Error(response.error || "Failed to load Instagram posts");
 },
-staleTime: 5 _ 60 _ 1000,
-gcTime: 30 _ 60 _ 1000,
+staleTime: 5 * 60 * 1000,
+gcTime: 30 * 60 * 1000,
 retry: 2,
 });
 }

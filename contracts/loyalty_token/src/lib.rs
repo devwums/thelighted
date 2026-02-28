@@ -1,3 +1,28 @@
+//! # Loyalty Token Contract  (BITE)
+//!
+//! A SEP-41 compatible fungible token that powers the restaurant platform's
+//! customer loyalty programme.
+//!
+//! ## Token details
+//! | Field   | Value         |
+//! |---------|---------------|
+//! | Name    | Bite Rewards  |
+//! | Symbol  | BITE          |
+//! | Decimals| 7             |
+//!
+//! ## Earning BITE
+//! The admin (or an authorised minter – typically the Order contract) calls
+//! `mint` after an order is marked *Delivered*.  A suggested policy is:
+//! **1 BITE per 10 000 stroops (0.001 XLM) spent**.
+//!
+//! ## Redeeming BITE
+//! A customer `burn`s their BITE tokens and the backend applies a discount to
+//! the next order.  The redemption rate is managed off-chain.
+//!
+//! ## SEP-41 surface
+//! Implements the full `token::Interface` trait so the token appears correctly
+//! in Stellar wallets.
+
 #![no_std]
 
 use soroban_sdk::{

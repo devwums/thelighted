@@ -181,7 +181,6 @@ impl RestaurantRegistry {
         );
     }
 
-
     /// Activate or deactivate a restaurant.
     ///
     /// Only the owner or admin may change the active flag.

@@ -39,7 +39,7 @@ message += `${index + 1}. ${item.name} x${item.quantity} - ${formatCurrency(
 });
 
 const total = items.reduce(
-(sum, item) => sum + item.price \* item.quantity,
+(sum, item) => sum + item.price * item.quantity,
 0
 );
 message += `\nTotal: ${formatCurrency(total)}`;
@@ -150,7 +150,7 @@ return text
 }
 
 // Debounce function
-export function debounce<T extends (...args: any[]) => any>(
+export function debounce<T extends (...args: unknown[]) => unknown>(
 func: T,
 wait: number
 ): (...args: Parameters<T>) => void {
